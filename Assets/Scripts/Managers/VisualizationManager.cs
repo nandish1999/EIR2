@@ -5,11 +5,30 @@ using UnityEngine;
 /// <summary>
 /// Manages the in-place expansion visualization of the cluster tree.
 ///
-/// Placement strategy: Candidate K (global anchor + uniform planet scale).
+/// Placement strategy: Candidate K with Density-Adaptive Overlap Resolution
+/// and Density-Adaptive Scaling.
+///
+/// Candidate K (global anchor + per-planet affine scaling):
 /// - Planets are placed at their raw UMAP positions × positionScale.
 /// - All children and images within a planet are positioned relative to
-///   the planet's world position using their UMAP offset × planetScale.
-/// - This preserves all within-planet distance ratios exactly.
+///   the planet's world position using their UMAP offset × effectivePlanetScale.
+/// - Each planet's effectivePlanetScale is derived from its local density
+///   context: isolated planets get the full base planetScale, while planets
+///   in dense clusters get a reduced scale to minimize cross-planet
+///   image cloud overlap.
+/// - Within each planet the transformation is still a uniform affine,
+///   so all within-planet distance ratios are preserved exactly.
+///
+/// Density-Adaptive Overlap Resolution:
+/// - At each hierarchy level where local density causes radius-vs-spacing
+///   mismatch, visual sphere radii are capped based on nearest-neighbour
+///   spacing (sibling radius capping).
+/// - At the top level, if residual overlap remains after capping, a minimal
+///   position separation pass pushes overlapping planets apart while
+///   preserving local neighbourhood topology.
+/// - This resolution is data-driven: it is a no-op for sparse configurations
+///   (e.g., 4 planets) and activates automatically for denser ones (e.g., 47).
+///
 /// - Clicking a node toggles expansion: reveals/hides its direct children.
 /// - Collapsing is recursive: all expanded descendants are also collapsed.
 /// </summary>
@@ -51,17 +70,41 @@ public class VisualizationManager : MonoBehaviour
 
 
     [Header("Global Anchor Placement")]
-    [Tooltip("Uniform scale applied to UMAP offsets from planet center. " +
+    [Tooltip("Base scale applied to UMAP offsets from planet center. " +
              "Higher values spread entities further apart for better readability. " +
-             "Does not affect neighbour relationships (only applies a uniform scale).")]
+             "With adaptive scaling enabled, this is the maximum scale; " +
+             "dense-cluster planets may receive a reduced effective scale.")]
     [Range(1f, 10f)]
     public float planetScale = 5.0f;
+
+    [Tooltip("Controls per-planet density-adaptive scaling. " +
+             "0 = uniform planetScale for all planets (original behavior). " +
+             "1 = full adaptation (dense-cluster planets get reduced scale). " +
+             "Each planet still uses a uniform affine, preserving within-planet fidelity.")]
+    [Range(0f, 1f)]
+    public float adaptiveScaleSensitivity = 1.0f;
 
     [Header("Overlap Resolution")]
     [Tooltip("Sibling radius cap factor: max_radius = capFactor × avg_NN/2. " +
              "Lower = more aggressive shrinking in dense groups. 0 = disabled.")]
     [Range(0f, 2f)]
     public float siblingRadiusCapFactor = 0.6f;
+
+    [Header("Top-Level Overlap Resolution")]
+    [Tooltip("Enable density-adaptive overlap resolution for top-level planets. " +
+             "When enabled, applies radius capping and position separation to " +
+             "prevent overlap among top-level planets. No-op for sparse configurations.")]
+    public bool enableTopLevelOverlapResolution = true;
+
+    [Tooltip("Extra margin between top-level planets after separation (world units). " +
+             "Adds breathing room beyond zero-overlap.")]
+    [Range(0f, 2f)]
+    public float topLevelMargin = 0.2f;
+
+    [Tooltip("Maximum iterations for top-level position separation pass. " +
+             "0 = radius capping only, no position adjustment.")]
+    [Range(0, 300)]
+    public int topLevelSeparationIterations = 100;
 
     [Header("Image Display")]
     [Tooltip("Maximum size of each image quad in world units. " +
@@ -114,6 +157,15 @@ public class VisualizationManager : MonoBehaviour
     /// are positioned relative to their planet ancestor's world position.
     /// </summary>
     private Dictionary<ClusterNode, Vector3> nodeWorldPositionMap = new Dictionary<ClusterNode, Vector3>();
+
+    /// <summary>
+    /// Maps each top-level planet to its effective planetScale, computed from
+    /// the planet's nearest-neighbour distance to other planets.
+    /// Isolated planets get the full base planetScale; dense-cluster planets
+    /// get a reduced scale to minimize cross-planet image cloud overlap.
+    /// Each planet still uses a uniform affine transformation internally.
+    /// </summary>
+    private Dictionary<ClusterNode, float> planetEffectiveScale = new Dictionary<ClusterNode, float>();
 
     /// <summary>
     /// Maps each expanded ClusterNode to the list of connection line GameObjects
@@ -238,20 +290,228 @@ public class VisualizationManager : MonoBehaviour
     // -----------------------------------------------------------
 
     /// <summary>
-    /// Spawns the 3 top-level planet spheres at their true CSV positions.
+    /// Spawns top-level planet spheres with density-adaptive overlap resolution.
+    ///
+    /// Pipeline:
+    ///   1. Compute raw UMAP positions × positionScale for all planets
+    ///   2. Compute uncapped radii (log₂ formula, depth=0)
+    ///   3. If overlap resolution is enabled:
+    ///      a. Apply sibling radius capping (same mechanism as child-level)
+    ///      b. Apply iterative position separation to eliminate residual overlap
+    ///   4. Spawn each planet at its resolved position with its final radius
+    ///   5. Store resolved positions in nodeWorldPositionMap for Candidate K
+    ///      child anchoring
+    ///
+    /// For sparse configurations (e.g., 4 well-separated planets), steps 3a–3b
+    /// are effectively no-ops — no radii are capped and no positions are moved.
     /// These are always visible — never destroyed during navigation.
     /// </summary>
     private void SpawnPlanets()
     {
         var planets = dataManager.Tree.Planets;
+        int count = planets.Count;
 
-        foreach (var planet in planets)
+        // Phase 1: Compute raw positions and uncapped radii
+        Vector3[] positions = new Vector3[count];
+        float[] uncappedRadii = new float[count];
+
+        for (int i = 0; i < count; i++)
         {
-            GameObject obj = SpawnNodeSphere(planet);
+            positions[i] = planets[i].Position * positionScale;
+
+            float baseRadius = ComputeRadius(planets[i].Size);
+            // Depth = 0 for top-level planets, so depthScale = 1.0
+            uncappedRadii[i] = Mathf.Max(baseRadius, minEffectiveRadius);
+        }
+
+        // Phase 1b: Compute per-planet density-adaptive effective scale
+        ComputePlanetEffectiveScales(planets, positions);
+
+        // Phase 2: Density-adaptive overlap resolution
+        float[] finalRadii;
+        Vector3[] finalPositions;
+
+        if (enableTopLevelOverlapResolution && count > 1)
+        {
+            // Phase 2a: Apply sibling radius capping (same mechanism as child-level)
+            finalRadii = ComputeSiblingCappedRadii(positions, uncappedRadii);
+
+            // Phase 2b: Apply iterative position separation for residual overlap
+            if (topLevelSeparationIterations > 0)
+            {
+                finalPositions = ResolveTopLevelOverlaps(
+                    positions, finalRadii, topLevelMargin, topLevelSeparationIterations);
+            }
+            else
+            {
+                finalPositions = positions;
+            }
+        }
+        else
+        {
+            // No resolution — use raw positions and radii as-is
+            finalRadii = uncappedRadii;
+            finalPositions = positions;
+        }
+
+        // Phase 3: Spawn each planet at its resolved position with final radius
+        for (int i = 0; i < count; i++)
+        {
+            GameObject obj = SpawnNodeSphere(planets[i], finalPositions[i], finalRadii[i]);
             planetObjects.Add(obj);
         }
 
-        Debug.Log($"[VisualizationManager] ✅ Spawned {planets.Count} top-level planets.");
+        Debug.Log($"[VisualizationManager] ✅ Spawned {count} top-level planets" +
+                  (enableTopLevelOverlapResolution
+                      ? $" (density-adaptive overlap resolution applied)."
+                      : " (no overlap resolution)."));
+    }
+
+    /// <summary>
+    /// Iterative position separation pass for top-level planets.
+    ///
+    /// For each overlapping pair, pushes both planets apart along their
+    /// connecting vector by half the overlap distance. Repeats until no
+    /// overlaps remain or maxIterations is reached.
+    ///
+    /// Preserves local neighbourhood topology: nearby planets stay nearby,
+    /// they are just nudged apart enough to eliminate visual overlap.
+    ///
+    /// Returns a new array of resolved positions. Input arrays are not modified.
+    /// </summary>
+    private Vector3[] ResolveTopLevelOverlaps(Vector3[] positions, float[] radii,
+                                              float margin, int maxIterations)
+    {
+        int count = positions.Length;
+        Vector3[] resolved = new Vector3[count];
+        System.Array.Copy(positions, resolved, count);
+
+        int finalIter = 0;
+        for (int iter = 0; iter < maxIterations; iter++)
+        {
+            bool anyOverlap = false;
+            for (int i = 0; i < count; i++)
+            {
+                for (int j = i + 1; j < count; j++)
+                {
+                    float dist = Vector3.Distance(resolved[i], resolved[j]);
+                    float minDist = radii[i] + radii[j] + margin;
+
+                    if (dist < minDist)
+                    {
+                        anyOverlap = true;
+                        if (dist > 0.0001f)
+                        {
+                            Vector3 dir = (resolved[j] - resolved[i]).normalized;
+                            float push = (minDist - dist) / 2f;
+                            resolved[i] -= dir * push;
+                            resolved[j] += dir * push;
+                        }
+                        else
+                        {
+                            // Coincident points — push apart along an arbitrary axis
+                            resolved[j] += new Vector3(minDist / 2f, 0f, 0f);
+                            resolved[i] -= new Vector3(minDist / 2f, 0f, 0f);
+                        }
+                    }
+                }
+            }
+            finalIter = iter + 1;
+            if (!anyOverlap) break;
+        }
+
+        Debug.Log($"[VisualizationManager] 🔧 Top-level position separation: " +
+                  $"converged in {finalIter}/{maxIterations} iterations " +
+                  $"(margin={margin:F2}).");
+
+        return resolved;
+    }
+
+    /// <summary>
+    /// Computes per-planet effective planetScale values based on each planet's
+    /// nearest-neighbour distance to other planets.
+    ///
+    /// Formula: effectiveScale = Lerp(planetScale,
+    ///              planetScale × min(1, nn / medianNN),
+    ///              adaptiveScaleSensitivity)
+    ///
+    /// With sensitivity=0: all planets get uniform planetScale (original behavior).
+    /// With sensitivity=1: dense-cluster planets get reduced scale proportional
+    /// to their nearest-neighbour distance relative to the median.
+    ///
+    /// This preserves within-planet fidelity because each planet still uses
+    /// a uniform affine transformation — only the scale factor varies per planet.
+    /// </summary>
+    private void ComputePlanetEffectiveScales(List<ClusterNode> planets, Vector3[] positions)
+    {
+        planetEffectiveScale.Clear();
+        int count = planets.Count;
+
+        if (count < 2 || adaptiveScaleSensitivity <= 0f)
+        {
+            // No adaptation — all planets get uniform planetScale
+            for (int i = 0; i < count; i++)
+                planetEffectiveScale[planets[i]] = planetScale;
+
+            Debug.Log($"[VisualizationManager] Adaptive scaling: OFF " +
+                      $"(sensitivity={adaptiveScaleSensitivity:F2}, all planets use planetScale={planetScale:F1}).");
+            return;
+        }
+
+        // Step 1: Compute NN distance for each planet
+        float[] nnDists = new float[count];
+        for (int i = 0; i < count; i++)
+        {
+            float minDist = float.MaxValue;
+            for (int j = 0; j < count; j++)
+            {
+                if (i == j) continue;
+                float d = Vector3.Distance(positions[i], positions[j]);
+                if (d < minDist) minDist = d;
+            }
+            nnDists[i] = minDist;
+        }
+
+        // Step 2: Compute median NN distance
+        float[] sorted = new float[count];
+        System.Array.Copy(nnDists, sorted, count);
+        System.Array.Sort(sorted);
+        float medianNN = (count % 2 == 0)
+            ? (sorted[count / 2 - 1] + sorted[count / 2]) / 2f
+            : sorted[count / 2];
+
+        // Step 3: Compute per-planet effective scale
+        int adaptedCount = 0;
+        float minScale = float.MaxValue, maxScale = float.MinValue;
+
+        for (int i = 0; i < count; i++)
+        {
+            float densityFactor = Mathf.Min(1f, nnDists[i] / medianNN);
+            float adaptedScale = planetScale * densityFactor;
+            float effectiveScale = Mathf.Lerp(planetScale, adaptedScale, adaptiveScaleSensitivity);
+
+            planetEffectiveScale[planets[i]] = effectiveScale;
+
+            if (effectiveScale < planetScale - 0.01f) adaptedCount++;
+            if (effectiveScale < minScale) minScale = effectiveScale;
+            if (effectiveScale > maxScale) maxScale = effectiveScale;
+        }
+
+        Debug.Log($"[VisualizationManager] 🎯 Adaptive scaling: {adaptedCount}/{count} planets " +
+                  $"received reduced scale (sensitivity={adaptiveScaleSensitivity:F2}, " +
+                  $"base={planetScale:F1}, range=[{minScale:F2}..{maxScale:F2}], " +
+                  $"medianNN={medianNN:F2}).");
+    }
+
+    /// <summary>
+    /// Returns the effective planetScale for a given planet node.
+    /// Falls back to the global planetScale if no adaptive scale was computed.
+    /// </summary>
+    private float GetEffectivePlanetScale(ClusterNode planetNode)
+    {
+        if (planetEffectiveScale.TryGetValue(planetNode, out float scale))
+            return scale;
+        return planetScale;
     }
 
     // -----------------------------------------------------------
@@ -405,8 +665,12 @@ public class VisualizationManager : MonoBehaviour
     /// This preserves all within-planet distance ratios and eliminates
     /// recursive compounding.
     ///
-    /// After computing Candidate K positions, applies sibling-local radius
-    /// capping to prevent visual overlap among dense sibling groups.
+    /// After computing Candidate K positions, applies density-adaptive overlap
+    /// resolution in two steps:
+    ///   1. Sibling-local radius capping (prevents overlap among siblings)
+    ///   2. Parent-relative radius capping (prevents children from being
+    ///      visually larger than their parent's displayed size)
+    ///
     /// Positions are NOT modified — only visual sphere radii are capped.
     /// </summary>
     private void SpawnChildren(ClusterNode parentNode)
@@ -417,6 +681,7 @@ public class VisualizationManager : MonoBehaviour
         ClusterNode planetNode = GetPlanetAncestor(parentNode);
         Vector3 planetWorldPos = nodeWorldPositionMap[planetNode];
         Vector3 planetRawPos = planetNode.Position * positionScale;
+        float effScale = GetEffectivePlanetScale(planetNode);
 
         // Phase A: Pre-compute all Candidate K positions and uncapped radii
         Vector3[] childPositions = new Vector3[children.Count];
@@ -425,7 +690,7 @@ public class VisualizationManager : MonoBehaviour
         for (int i = 0; i < children.Count; i++)
         {
             Vector3 globalOffset = children[i].Position * positionScale - planetRawPos;
-            childPositions[i] = planetWorldPos + globalOffset * planetScale;
+            childPositions[i] = planetWorldPos + globalOffset * effScale;
 
             float baseRadius = ComputeRadius(children[i].Size);
             float depthScale = Mathf.Pow(depthRadiusFactor, children[i].Depth);
@@ -435,12 +700,52 @@ public class VisualizationManager : MonoBehaviour
         // Phase B–D: Sibling-local radius capping (only for groups with 2+ children)
         float[] cappedRadii = ComputeSiblingCappedRadii(childPositions, uncappedRadii);
 
-        // Phase E: Spawn each child at its exact Candidate K position with capped radius
+        // Phase E: Parent-relative radius capping
+        // Prevents expanded children from being visually larger than their
+        // parent's displayed sphere. This maintains visual hierarchy especially
+        // when the parent was itself heavily capped by top-level resolution.
+        float parentDisplayedRadius = GetDisplayedRadius(parentNode);
+        if (parentDisplayedRadius > 0f)
+        {
+            int parentCappedCount = 0;
+            for (int i = 0; i < children.Count; i++)
+            {
+                if (cappedRadii[i] > parentDisplayedRadius)
+                {
+                    cappedRadii[i] = Mathf.Max(parentDisplayedRadius, minEffectiveRadius);
+                    parentCappedCount++;
+                }
+            }
+            if (parentCappedCount > 0)
+            {
+                Debug.Log($"[VisualizationManager] Parent-relative cap: " +
+                          $"{parentCappedCount}/{children.Count} children capped " +
+                          $"to parent radius {parentDisplayedRadius:F3} " +
+                          $"(parent=\"{parentNode.NodeId}\").");
+            }
+        }
+
+        // Phase F: Spawn each child at its exact Candidate K position with final radius
         for (int i = 0; i < children.Count; i++)
         {
             GameObject obj = SpawnNodeSphere(children[i], childPositions[i], cappedRadii[i]);
             parentNode.SpawnedChildObjects.Add(obj);
         }
+    }
+
+    /// <summary>
+    /// Returns the displayed (visual) radius of a node's sphere.
+    /// Reads the actual localScale from the spawned GameObject.
+    /// Returns 0 if the node has no spawned sphere.
+    /// </summary>
+    private float GetDisplayedRadius(ClusterNode node)
+    {
+        if (nodeSphereMap.TryGetValue(node, out GameObject sphereObj) && sphereObj != null)
+        {
+            // Sphere diameter = localScale.x, so radius = localScale.x / 2
+            return sphereObj.transform.localScale.x / 2f;
+        }
+        return 0f;
     }
 
     /// <summary>
@@ -563,12 +868,13 @@ public class VisualizationManager : MonoBehaviour
         Vector3 planetWorldPos = nodeWorldPositionMap[planetNode];
         Vector3 planetRawPos = planetNode.Position * positionScale;
 
-        // Pre-compute all scaled positions
+        // Pre-compute all scaled positions (using per-planet effective scale)
+        float effScale = GetEffectivePlanetScale(planetNode);
         Vector3[] scaledPositions = new Vector3[images.Count];
         for (int i = 0; i < images.Count; i++)
         {
             Vector3 globalOffset = images[i].Position * positionScale - planetRawPos;
-            scaledPositions[i] = planetWorldPos + globalOffset * planetScale;
+            scaledPositions[i] = planetWorldPos + globalOffset * effScale;
         }
 
         // Compute actual group spread for adaptive quad sizing
@@ -902,12 +1208,19 @@ public class VisualizationManager : MonoBehaviour
 
     /// <summary>
     /// Returns the base color for a planet by its index.
+    /// Uses the explicit planetColors array if available.
+    /// For indices beyond the array, auto-generates distinct colors
+    /// using golden-ratio hue distribution in HSL space.
     /// </summary>
     private Color GetPlanetColor(int planetIndex)
     {
         if (planetColors != null && planetIndex >= 0 && planetIndex < planetColors.Length)
             return planetColors[planetIndex];
-        return Color.white;
+
+        // Auto-generate for arbitrary planet counts using golden ratio
+        // for maximum perceptual separation between adjacent indices
+        float hue = (planetIndex * 0.618033988f) % 1f;
+        return Color.HSVToRGB(hue, 0.7f, 0.85f);
     }
 
     // -----------------------------------------------------------

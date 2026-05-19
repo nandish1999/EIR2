@@ -151,7 +151,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 114a661c300e945bb8dd9b54b5bcd77c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  csvRelativePath: Data/unity_pruned_density_tree_3d_colors.csv
+  csvRelativePath: Data/unity_pruned_density_tree_butterfly_3d.csv
 --- !u!4 &546220611
 Transform:
   m_ObjectHideFlags: 0
@@ -182,14 +182,18 @@ MonoBehaviour:
   dataManager: {fileID: 546220610}
   planetPrefab: {fileID: 5306208223888552666, guid: 54287b180aca049c4a0608ab924bb084, type: 3}
   cameraController: {fileID: 963194229}
-  positionScale: 1
+  positionScale: 5
   radiusScale: 0.3
   minRadius: 0.3
   depthRadiusFactor: 0.65
   minEffectiveRadius: 0.1
-  planetScale: 3
+  planetScale: 2
+  adaptiveScaleSensitivity: 1
   siblingRadiusCapFactor: 0.6
-  imageQuadSize: 0.8
+  enableTopLevelOverlapResolution: 1
+  topLevelMargin: 1.2
+  topLevelSeparationIterations: 300
+  imageQuadSize: 0.3
   minImageQuadSize: 0.05
   planetColors:
   - {r: 0.29, g: 0.56, b: 0.85, a: 1}

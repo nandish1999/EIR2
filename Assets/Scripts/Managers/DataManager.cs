@@ -9,7 +9,7 @@ public class DataManager : MonoBehaviour
 {
     [Header("CSV Settings")]
     [Tooltip("Path to the CSV file, relative to StreamingAssets/")]
-    public string csvRelativePath = "Data/unity_pruned_density_tree_3d_colors.csv";
+    public string csvRelativePath = "Data/unity_pruned_density_tree_butterfly_3d.csv";
 
     /// <summary>
     /// The fully constructed cluster tree.

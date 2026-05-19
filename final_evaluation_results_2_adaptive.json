@@ -1,0 +1,521 @@
+{
+  "within_planet": {
+    "0": {
+      "n": 82,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "1": {
+      "n": 168,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "2": {
+      "n": 81,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "3": {
+      "n": 334,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "4": {
+      "n": 96,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "5": {
+      "n": 663,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "6": {
+      "n": 81,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "7": {
+      "n": 456,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "8": {
+      "n": 65,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "9": {
+      "n": 202,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "10": {
+      "n": 145,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "11": {
+      "n": 76,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "12": {
+      "n": 46,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "13": {
+      "n": 126,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "14": {
+      "n": 64,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "15": {
+      "n": 155,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "16": {
+      "n": 81,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "17": {
+      "n": 103,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "18": {
+      "n": 295,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "19": {
+      "n": 119,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "20": {
+      "n": 136,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "21": {
+      "n": 101,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "22": {
+      "n": 127,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "23": {
+      "n": 87,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "24": {
+      "n": 118,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "25": {
+      "n": 70,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "26": {
+      "n": 90,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "27": {
+      "n": 125,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "28": {
+      "n": 141,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "29": {
+      "n": 85,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "30": {
+      "n": 68,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "31": {
+      "n": 57,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "32": {
+      "n": 78,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "33": {
+      "n": 122,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "34": {
+      "n": 300,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "35": {
+      "n": 56,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "36": {
+      "n": 60,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "37": {
+      "n": 128,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "38": {
+      "n": 115,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "39": {
+      "n": 115,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "40": {
+      "n": 217,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "41": {
+      "n": 88,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "42": {
+      "n": 103,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "43": {
+      "n": 123,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "44": {
+      "n": 182,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "45": {
+      "n": 75,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    },
+    "46": {
+      "n": 94,
+      "k5_mean": 1.0,
+      "k5_min": 1.0,
+      "k5_zero": 0,
+      "k10_mean": 1.0,
+      "k10_min": 1.0,
+      "k10_zero": 0
+    }
+  },
+  "within_planet_summary": {
+    "planets_evaluated": 47,
+    "perfect_k5": 47,
+    "perfect_k10": 47,
+    "overall_mean_k5": 1.0,
+    "overall_mean_k10": 1.0
+  },
+  "global_fidelity": {
+    "n": 6499,
+    "k5": {
+      "mean": 0.8935220803200492,
+      "median": 1.0,
+      "min": 0.0,
+      "zero_count": 164,
+      "zero_pct": 2.52
+    },
+    "k10": {
+      "mean": 0.8879519926142484,
+      "median": 1.0,
+      "min": 0.0,
+      "zero_count": 72,
+      "zero_pct": 1.11
+    },
+    "cl5": {
+      "before": 27.54,
+      "after": 32.72,
+      "delta": 5.18
+    },
+    "cl10": {
+      "before": 30.28,
+      "after": 35.31,
+      "delta": 5.03
+    },
+    "cp5": {
+      "before": 3.99,
+      "after": 11.25,
+      "delta": 7.27
+    },
+    "cp10": {
+      "before": 4.45,
+      "after": 12.27,
+      "delta": 7.83
+    },
+    "pres": {
+      "intra_p": 21797,
+      "intra_t": 23546,
+      "intra_pct": 92.57,
+      "cross_p": 7238,
+      "cross_t": 8949,
+      "cross_pct": 80.88
+    }
+  },
+  "readability": {
+    "t_op": 108,
+    "t_tp": 155496,
+    "opr_pct": 0.0695,
+    "nn_lt_q": 167,
+    "nn_lt_q_pct": 2.57,
+    "g_min": 0.0227,
+    "iip": 923,
+    "iip_pct": 14.2,
+    "nco": 70,
+    "tnc": 206,
+    "nco_pct": 33.98,
+    "nn_min": 0.0227,
+    "nn_mean": 0.8123,
+    "nn_med": 0.6276,
+    "nn_max": 32.7531,
+    "pcts": {
+      "P10": 0.2156,
+      "P25": 0.3727,
+      "P50": 0.6276,
+      "P75": 1.0384,
+      "P90": 1.6134
+    },
+    "rs": 0.8792,
+    "verdict": "Acceptable"
+  },
+  "meta": {
+    "dataset": "Butterfly (Dataset 2)",
+    "project": "ButterflyClusterViz 2",
+    "method": "Candidate K + Density-Adaptive Scaling",
+    "nodes": 253,
+    "images": 6499,
+    "planets": 47,
+    "positionScale": 10.0,
+    "planetScale": 1.7,
+    "adaptiveScaleSensitivity": 1.0,
+    "siblingRadiusCapFactor": 0.6,
+    "topLevelMargin": 1.2,
+    "topLevelSeparationIterations": 300,
+    "imageQuadSize": 0.1,
+    "timestamp": "2026-05-03T05:21:23.869006"
+  }
+}

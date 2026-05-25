@@ -1195,11 +1195,19 @@ public class VisualizationManager : MonoBehaviour
     /// </summary>
     private Color GetNodeColor(ClusterNode node)
     {
-        Color baseColor = GetPlanetColor(node.PlanetIndex);
+        // Use semantic cluster color from CSV
+        Color baseColor = node.RepresentativeColor;
 
+        // Fallback safety
+        if (baseColor == Color.clear || baseColor == Color.black)
+        {
+            baseColor = GetPlanetColor(node.PlanetIndex);
+        }
+
+        // Optional depth tint
         if (tintByDepth && node.Depth > 0)
         {
-            float lightenAmount = node.Depth * 0.06f;
+            float lightenAmount = node.Depth * 0.04f;
             baseColor = Color.Lerp(baseColor, Color.white, Mathf.Clamp01(lightenAmount));
         }
 

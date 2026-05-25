@@ -213,7 +213,21 @@ public static class CSVParser
             X = x,
             Y = y,
             Z = z,
-            ImageId = fields[fields.Length - 1]  // always the last column (index 9 or 12)
+
+            // RGB values from *_colors.csv node rows
+            R = (fields.Length > 9 && !string.IsNullOrEmpty(fields[9])) 
+                ? float.Parse(fields[9], System.Globalization.CultureInfo.InvariantCulture)
+                : 0f,
+
+            G = (fields.Length > 10 && !string.IsNullOrEmpty(fields[10]))
+                ? float.Parse(fields[10], System.Globalization.CultureInfo.InvariantCulture)
+                : 0f,
+
+            B = (fields.Length > 11 && !string.IsNullOrEmpty(fields[11]))
+                ? float.Parse(fields[11], System.Globalization.CultureInfo.InvariantCulture)
+                : 0f,
+
+            ImageId = fields[fields.Length - 1]
         };
 
         // Type-specific validation

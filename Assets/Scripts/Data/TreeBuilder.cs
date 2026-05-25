@@ -59,7 +59,10 @@ public static class TreeBuilder
                 PlanetIndex = row.PlanetIndex,
                 Size = row.Size,
                 Position = row.GetPosition(),
-                Depth = -1 // will be computed in Pass 4
+                Depth = -1, // will be computed in Pass 4
+
+                // Semantic cluster color from CSV
+                RepresentativeColor = new Color(row.R, row.G, row.B, 1f)
             };
 
             tree.NodeLookup[node.NodeId] = node;

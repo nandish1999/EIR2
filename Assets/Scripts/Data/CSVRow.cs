@@ -56,6 +56,15 @@ public class CSVRow
     /// <summary>UMAP 3D z-coordinate.</summary>
     public float Z;
 
+    /// <summary>Representative color R channel (0–1).</summary>
+    public float R;
+
+    /// <summary>Representative color G channel (0–1).</summary>
+    public float G;
+
+    /// <summary>Representative color B channel (0–1).</summary>
+    public float B;
+
     /// <summary>
     /// Butterfly image filename (e.g. "10720.jpg").
     /// Empty for node rows.

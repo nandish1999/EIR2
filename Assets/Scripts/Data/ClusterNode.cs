@@ -79,6 +79,11 @@ public class ClusterNode
     /// </summary>
     public Vector3 Position;
 
+
+    /// <summary>
+    /// Representative semantic color parsed from CSV.
+    /// </summary>
+    public Color RepresentativeColor = Color.white;
     // -----------------------------------------------------------
     // Runtime expansion state (Phase 6 — not from CSV)
     // -----------------------------------------------------------

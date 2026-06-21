@@ -2,8 +2,41 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
+/// <summary>
+/// Manages the in-place expansion visualization of the cluster tree.
+///
+/// Placement strategy: Candidate K with Density-Adaptive Overlap Resolution
+/// and Density-Adaptive Scaling.
+///
+/// Candidate K (global anchor + per-planet affine scaling):
+/// - Planets are placed at their raw UMAP positions × positionScale.
+/// - All children and images within a planet are positioned relative to
+///   the planet's world position using their UMAP offset × effectivePlanetScale.
+/// - Each planet's effectivePlanetScale is derived from its local density
+///   context: isolated planets get the full base planetScale, while planets
+///   in dense clusters get a reduced scale to minimize cross-planet
+///   image cloud overlap.
+/// - Within each planet the transformation is still a uniform affine,
+///   so all within-planet distance ratios are preserved exactly.
+///
+/// Density-Adaptive Overlap Resolution:
+/// - At each hierarchy level where local density causes radius-vs-spacing
+///   mismatch, visual sphere radii are capped based on nearest-neighbour
+///   spacing (sibling radius capping).
+/// - At the top level, if residual overlap remains after capping, a minimal
+///   position separation pass pushes overlapping planets apart while
+///   preserving local neighbourhood topology.
+/// - This resolution is data-driven: it is a no-op for sparse configurations
+///   (e.g., 4 planets) and activates automatically for denser ones (e.g., 47).
+///
+/// - Clicking a node toggles expansion: reveals/hides its direct children.
+/// - Collapsing is recursive: all expanded descendants are also collapsed.
+/// </summary>
 public class VisualizationManager : MonoBehaviour
 {
+    // -----------------------------------------------------------
+    // Inspector-assigned references
+    // -----------------------------------------------------------
 
     [Header("References")]
     [Tooltip("The DataManager that provides the ClusterTree.")]
@@ -34,6 +67,7 @@ public class VisualizationManager : MonoBehaviour
 
     [Tooltip("Minimum effective radius after depth scaling, so deep nodes stay visible.")]
     public float minEffectiveRadius = 0.1f;
+
 
     [Header("Global Anchor Placement")]
     [Tooltip("Base scale applied to UMAP offsets from planet center. " +
@@ -84,46 +118,101 @@ public class VisualizationManager : MonoBehaviour
     [Tooltip("Colors assigned to each planet by index.")]
     public Color[] planetColors = new Color[]
     {
-        new Color(0.29f, 0.56f, 0.85f, 1f),
-        new Color(0.85f, 0.44f, 0.29f, 1f),
-        new Color(0.29f, 0.78f, 0.47f, 1f),
+        new Color(0.29f, 0.56f, 0.85f, 1f),  // planet_0: soft blue
+        new Color(0.85f, 0.44f, 0.29f, 1f),  // planet_1: warm orange
+        new Color(0.29f, 0.78f, 0.47f, 1f),  // planet_2: fresh green
     };
 
     [Header("Depth Colors")]
     [Tooltip("If true, darken/lighten the planet color based on depth.")]
     public bool tintByDepth = true;
 
+    // -----------------------------------------------------------
+    // Runtime state
+    // -----------------------------------------------------------
+
+    /// <summary>Container transform for all spawned objects.</summary>
     private Transform objectContainer;
 
+    /// <summary>
+    /// Stack tracking the order of expansions for Escape-undo behavior.
+    /// Most recently expanded node is on top.
+    /// </summary>
     private Stack<ClusterNode> expansionHistory = new Stack<ClusterNode>();
 
+    /// <summary>
+    /// References to the top-level planet GameObjects (always visible).
+    /// </summary>
     private List<GameObject> planetObjects = new List<GameObject>();
 
+    /// <summary>
+    /// Maps each ClusterNode to the GameObject representing its sphere.
+    /// Used to hide/show the parent sphere when expanding/collapsing.
+    /// </summary>
     private Dictionary<ClusterNode, GameObject> nodeSphereMap = new Dictionary<ClusterNode, GameObject>();
 
+    /// <summary>
+    /// Maps each ClusterNode to its actual spawned world position.
+    /// Used by the Candidate K global-anchor strategy: children and images
+    /// are positioned relative to their planet ancestor's world position.
+    /// </summary>
     private Dictionary<ClusterNode, Vector3> nodeWorldPositionMap = new Dictionary<ClusterNode, Vector3>();
 
+    /// <summary>
+    /// Maps each top-level planet to its effective planetScale, computed from
+    /// the planet's nearest-neighbour distance to other planets.
+    /// Isolated planets get the full base planetScale; dense-cluster planets
+    /// get a reduced scale to minimize cross-planet image cloud overlap.
+    /// Each planet still uses a uniform affine transformation internally.
+    /// </summary>
     private Dictionary<ClusterNode, float> planetEffectiveScale = new Dictionary<ClusterNode, float>();
 
+    /// <summary>
+    /// Maps each expanded ClusterNode to the list of connection line GameObjects
+    /// drawn from the parent to each of its direct children.
+    /// Lines are created on expand and destroyed on collapse.
+    /// </summary>
     private Dictionary<ClusterNode, List<GameObject>> nodeConnectionLines = new Dictionary<ClusterNode, List<GameObject>>();
 
+
+    /// <summary>Duration in seconds for the parent sphere fade-out after expansion.</summary>
     private const float FadeOutDuration = 3f;
 
+    /// <summary>
+    /// Maps each expanded node to an active fade-out coroutine.
+    /// Used to cancel the fade safely on collapse.
+    /// </summary>
     private Dictionary<ClusterNode, Coroutine> activeFadeCoroutines = new Dictionary<ClusterNode, Coroutine>();
 
+    // -----------------------------------------------------------
+    // Ghost overlay state (P = ghost spheres, L = ghost lines)
+    // -----------------------------------------------------------
+
+    /// <summary>Whether the ghost planet overlay (P key) is currently active.</summary>
     private bool ghostPlanetOverlayActive = false;
 
+    /// <summary>Whether the ghost line overlay (L key) is currently active. L only works when P is ON.</summary>
     private bool ghostLineOverlayActive = false;
 
+    /// <summary>Tracked ghost sphere GameObjects for cleanup.</summary>
     private List<GameObject> ghostSphereObjects = new List<GameObject>();
 
+    /// <summary>Tracked ghost line GameObjects for cleanup.</summary>
     private List<GameObject> ghostLineObjects = new List<GameObject>();
 
+    /// <summary>
+    /// Nodes that currently have ghost spheres rendered.
+    /// Used by ShowGhostLines() to know which parents to draw lines from.
+    /// </summary>
     private List<ClusterNode> ghostedNodes = new List<ClusterNode>();
+
+    // -----------------------------------------------------------
+    // Lifecycle
+    // -----------------------------------------------------------
 
     void Start()
     {
-
+        // Validate references
         if (dataManager == null)
         {
             Debug.LogError("[VisualizationManager] DataManager reference is not assigned!");
@@ -140,14 +229,26 @@ public class VisualizationManager : MonoBehaviour
             return;
         }
 
+        // Create a container for spawned objects
         var containerObj = new GameObject("ObjectContainer");
         objectContainer = containerObj.transform;
 
+        // Spawn top-level planets (always visible, never destroyed)
         SpawnPlanets();
 
+        // One-time camera framing to show all planets at startup
         FrameInitialView();
     }
 
+    // -----------------------------------------------------------
+    // Public API (called by InteractionManager)
+    // -----------------------------------------------------------
+
+    /// <summary>
+    /// Toggles expansion state of a node.
+    /// If collapsed → expand (reveal children/images).
+    /// If expanded → collapse (hide descendants).
+    /// </summary>
     public void ToggleNode(ClusterNode node)
     {
         if (node == null) return;
@@ -162,6 +263,10 @@ public class VisualizationManager : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Collapses the most recently expanded node (Escape-undo).
+    /// Returns true if something was collapsed.
+    /// </summary>
     public bool CollapseLastExpanded()
     {
         while (expansionHistory.Count > 0)
@@ -172,18 +277,41 @@ public class VisualizationManager : MonoBehaviour
                 CollapseNode(node);
                 return true;
             }
-
+            // If it was already collapsed (e.g., by parent collapse), skip it
         }
         return false;
     }
 
+    /// <summary>True if there is at least one expanded node to undo.</summary>
     public bool HasExpandedNodes => expansionHistory.Count > 0;
 
+    // -----------------------------------------------------------
+    // Internal: spawn top-level planets
+    // -----------------------------------------------------------
+
+    /// <summary>
+    /// Spawns top-level planet spheres with density-adaptive overlap resolution.
+    ///
+    /// Pipeline:
+    ///   1. Compute raw UMAP positions × positionScale for all planets
+    ///   2. Compute uncapped radii (log₂ formula, depth=0)
+    ///   3. If overlap resolution is enabled:
+    ///      a. Apply sibling radius capping (same mechanism as child-level)
+    ///      b. Apply iterative position separation to eliminate residual overlap
+    ///   4. Spawn each planet at its resolved position with its final radius
+    ///   5. Store resolved positions in nodeWorldPositionMap for Candidate K
+    ///      child anchoring
+    ///
+    /// For sparse configurations (e.g., 4 well-separated planets), steps 3a–3b
+    /// are effectively no-ops — no radii are capped and no positions are moved.
+    /// These are always visible — never destroyed during navigation.
+    /// </summary>
     private void SpawnPlanets()
     {
         var planets = dataManager.Tree.Planets;
         int count = planets.Count;
 
+        // Phase 1: Compute raw positions and uncapped radii
         Vector3[] positions = new Vector3[count];
         float[] uncappedRadii = new float[count];
 
@@ -192,20 +320,23 @@ public class VisualizationManager : MonoBehaviour
             positions[i] = planets[i].Position * positionScale;
 
             float baseRadius = ComputeRadius(planets[i].Size);
-
+            // Depth = 0 for top-level planets, so depthScale = 1.0
             uncappedRadii[i] = Mathf.Max(baseRadius, minEffectiveRadius);
         }
 
+        // Phase 1b: Compute per-planet density-adaptive effective scale
         ComputePlanetEffectiveScales(planets, positions);
 
+        // Phase 2: Density-adaptive overlap resolution
         float[] finalRadii;
         Vector3[] finalPositions;
 
         if (enableTopLevelOverlapResolution && count > 1)
         {
-
+            // Phase 2a: Apply sibling radius capping (same mechanism as child-level)
             finalRadii = ComputeSiblingCappedRadii(positions, uncappedRadii);
 
+            // Phase 2b: Apply iterative position separation for residual overlap
             if (topLevelSeparationIterations > 0)
             {
                 finalPositions = ResolveTopLevelOverlaps(
@@ -218,11 +349,12 @@ public class VisualizationManager : MonoBehaviour
         }
         else
         {
-
+            // No resolution — use raw positions and radii as-is
             finalRadii = uncappedRadii;
             finalPositions = positions;
         }
 
+        // Phase 3: Spawn each planet at its resolved position with final radius
         for (int i = 0; i < count; i++)
         {
             GameObject obj = SpawnNodeSphere(planets[i], finalPositions[i], finalRadii[i]);
@@ -235,6 +367,18 @@ public class VisualizationManager : MonoBehaviour
                       : " (no overlap resolution)."));
     }
 
+    /// <summary>
+    /// Iterative position separation pass for top-level planets.
+    ///
+    /// For each overlapping pair, pushes both planets apart along their
+    /// connecting vector by half the overlap distance. Repeats until no
+    /// overlaps remain or maxIterations is reached.
+    ///
+    /// Preserves local neighbourhood topology: nearby planets stay nearby,
+    /// they are just nudged apart enough to eliminate visual overlap.
+    ///
+    /// Returns a new array of resolved positions. Input arrays are not modified.
+    /// </summary>
     private Vector3[] ResolveTopLevelOverlaps(Vector3[] positions, float[] radii,
                                               float margin, int maxIterations)
     {
@@ -265,7 +409,7 @@ public class VisualizationManager : MonoBehaviour
                         }
                         else
                         {
-
+                            // Coincident points — push apart along an arbitrary axis
                             resolved[j] += new Vector3(minDist / 2f, 0f, 0f);
                             resolved[i] -= new Vector3(minDist / 2f, 0f, 0f);
                         }
@@ -283,6 +427,21 @@ public class VisualizationManager : MonoBehaviour
         return resolved;
     }
 
+    /// <summary>
+    /// Computes per-planet effective planetScale values based on each planet's
+    /// nearest-neighbour distance to other planets.
+    ///
+    /// Formula: effectiveScale = Lerp(planetScale,
+    ///              planetScale × min(1, nn / medianNN),
+    ///              adaptiveScaleSensitivity)
+    ///
+    /// With sensitivity=0: all planets get uniform planetScale (original behavior).
+    /// With sensitivity=1: dense-cluster planets get reduced scale proportional
+    /// to their nearest-neighbour distance relative to the median.
+    ///
+    /// This preserves within-planet fidelity because each planet still uses
+    /// a uniform affine transformation — only the scale factor varies per planet.
+    /// </summary>
     private void ComputePlanetEffectiveScales(List<ClusterNode> planets, Vector3[] positions)
     {
         planetEffectiveScale.Clear();
@@ -290,7 +449,7 @@ public class VisualizationManager : MonoBehaviour
 
         if (count < 2 || adaptiveScaleSensitivity <= 0f)
         {
-
+            // No adaptation — all planets get uniform planetScale
             for (int i = 0; i < count; i++)
                 planetEffectiveScale[planets[i]] = planetScale;
 
@@ -299,6 +458,7 @@ public class VisualizationManager : MonoBehaviour
             return;
         }
 
+        // Step 1: Compute NN distance for each planet
         float[] nnDists = new float[count];
         for (int i = 0; i < count; i++)
         {
@@ -312,6 +472,7 @@ public class VisualizationManager : MonoBehaviour
             nnDists[i] = minDist;
         }
 
+        // Step 2: Compute median NN distance
         float[] sorted = new float[count];
         System.Array.Copy(nnDists, sorted, count);
         System.Array.Sort(sorted);
@@ -319,6 +480,7 @@ public class VisualizationManager : MonoBehaviour
             ? (sorted[count / 2 - 1] + sorted[count / 2]) / 2f
             : sorted[count / 2];
 
+        // Step 3: Compute per-planet effective scale
         int adaptedCount = 0;
         float minScale = float.MaxValue, maxScale = float.MinValue;
 
@@ -341,6 +503,10 @@ public class VisualizationManager : MonoBehaviour
                   $"medianNN={medianNN:F2}).");
     }
 
+    /// <summary>
+    /// Returns the effective planetScale for a given planet node.
+    /// Falls back to the global planetScale if no adaptive scale was computed.
+    /// </summary>
     private float GetEffectivePlanetScale(ClusterNode planetNode)
     {
         if (planetEffectiveScale.TryGetValue(planetNode, out float scale))
@@ -348,6 +514,13 @@ public class VisualizationManager : MonoBehaviour
         return planetScale;
     }
 
+    // -----------------------------------------------------------
+    // Internal: expansion
+    // -----------------------------------------------------------
+
+    /// <summary>
+    /// Expands a node: reveals its direct children (or images for leaves).
+    /// </summary>
     private void ExpandNode(ClusterNode node)
     {
         ClearAllGhostOverlays();
@@ -355,7 +528,7 @@ public class VisualizationManager : MonoBehaviour
 
         if (node.IsLeaf)
         {
-
+            // --- Leaf node: spawn image quads ---
             if (!node.HasImages)
             {
                 Debug.Log($"[VisualizationManager] Leaf \"{node.NodeId}\" has no images (pruned).");
@@ -366,50 +539,63 @@ public class VisualizationManager : MonoBehaviour
             node.IsExpanded = true;
             expansionHistory.Push(node);
 
+            // Disable collider so children are clickable
             if (nodeSphereMap.TryGetValue(node, out GameObject leafSphere))
             {
                 Collider col = leafSphere.GetComponent<Collider>();
                 if (col != null) col.enabled = false;
             }
 
+            // Draw connection lines from parent to each image
             SpawnConnectionLines(node);
 
+            // Start fade-out (parent fades to invisible, lines destroyed at end)
             StartFadeOut(node);
 
             Debug.Log($"[VisualizationManager] 🖼 Expanded leaf \"{node.NodeId}\" — " +
                       $"{node.ActualImageCount} images spawned at global-anchor positions.");
 
+            // Smoothly focus camera on the expansion region
             FocusCameraOnExpansion(node);
         }
         else
         {
-
+            // --- Branch node: spawn child spheres ---
             SpawnChildren(node);
             node.IsExpanded = true;
             expansionHistory.Push(node);
 
+            // Disable collider so children are clickable
             if (nodeSphereMap.TryGetValue(node, out GameObject branchSphere))
             {
                 Collider col = branchSphere.GetComponent<Collider>();
                 if (col != null) col.enabled = false;
             }
 
+            // Draw connection lines from parent to each child
             SpawnConnectionLines(node);
 
+            // Start fade-out (parent fades to invisible, lines destroyed at end)
             StartFadeOut(node);
 
             Debug.Log($"[VisualizationManager] 🔽 Expanded \"{node.NodeId}\" — " +
                       $"{node.ChildCount} children spawned at global-anchor positions.");
 
+            // Smoothly focus camera on the expansion region
             FocusCameraOnExpansion(node);
         }
     }
 
+    /// <summary>
+    /// Collapses a node: hides its spawned children/images, recursively
+    /// collapses any expanded descendants.
+    /// </summary>
     private void CollapseNode(ClusterNode node)
     {
         ClearAllGhostOverlays();
         if (!node.IsExpanded) return;
 
+        // First, recursively collapse any expanded children
         if (!node.IsLeaf && node.Children != null)
         {
             foreach (var child in node.Children)
@@ -421,11 +607,12 @@ public class VisualizationManager : MonoBehaviour
             }
         }
 
+        // Destroy all spawned child objects for this node
         foreach (var obj in node.SpawnedChildObjects)
         {
             if (obj != null)
             {
-
+                // Remove from nodeSphereMap and nodeWorldPositionMap
                 PlanetVisual pv = obj.GetComponent<PlanetVisual>();
                 if (pv != null && pv.Node != null)
                 {
@@ -439,13 +626,17 @@ public class VisualizationManager : MonoBehaviour
 
         node.IsExpanded = false;
 
+        // Cancel the fade-out coroutine if it is still running
         CancelFadeOut(node);
 
+        // Cancel any active camera transition so user control resumes
         if (cameraController != null)
             cameraController.CancelTransition();
 
+        // Destroy connection lines (safe no-op if already destroyed by fade)
         DestroyConnectionLines(node);
 
+        // Restore this node: visible + opaque + clickable
         if (nodeSphereMap.TryGetValue(node, out GameObject sphereObj) && sphereObj != null)
         {
             PlanetVisual visual = sphereObj.GetComponent<PlanetVisual>();
@@ -461,15 +652,38 @@ public class VisualizationManager : MonoBehaviour
         Debug.Log($"[VisualizationManager] 🔼 Collapsed \"{node.NodeId}\".");
     }
 
+    // -----------------------------------------------------------
+    // Internal: spawning
+    // -----------------------------------------------------------
+
+    /// <summary>
+    /// Spawns child node spheres around a parent node using global-anchor
+    /// placement (Candidate K — unified).
+    ///
+    /// Every child (whether single or multiple) is positioned using its raw
+    /// UMAP offset from the planet ancestor, scaled uniformly by planetScale.
+    /// This preserves all within-planet distance ratios and eliminates
+    /// recursive compounding.
+    ///
+    /// After computing Candidate K positions, applies density-adaptive overlap
+    /// resolution in two steps:
+    ///   1. Sibling-local radius capping (prevents overlap among siblings)
+    ///   2. Parent-relative radius capping (prevents children from being
+    ///      visually larger than their parent's displayed size)
+    ///
+    /// Positions are NOT modified — only visual sphere radii are capped.
+    /// </summary>
     private void SpawnChildren(ClusterNode parentNode)
     {
         var children = parentNode.Children;
 
+        // Global anchor placement (Candidate K) — unified for all child counts
         ClusterNode planetNode = GetPlanetAncestor(parentNode);
         Vector3 planetWorldPos = nodeWorldPositionMap[planetNode];
         Vector3 planetRawPos = planetNode.Position * positionScale;
         float effScale = GetEffectivePlanetScale(planetNode);
 
+        // Phase A: Pre-compute all Candidate K positions and uncapped radii
         Vector3[] childPositions = new Vector3[children.Count];
         float[] uncappedRadii = new float[children.Count];
 
@@ -483,8 +697,13 @@ public class VisualizationManager : MonoBehaviour
             uncappedRadii[i] = Mathf.Max(baseRadius * depthScale, minEffectiveRadius);
         }
 
+        // Phase B–D: Sibling-local radius capping (only for groups with 2+ children)
         float[] cappedRadii = ComputeSiblingCappedRadii(childPositions, uncappedRadii);
 
+        // Phase E: Parent-relative radius capping
+        // Prevents expanded children from being visually larger than their
+        // parent's displayed sphere. This maintains visual hierarchy especially
+        // when the parent was itself heavily capped by top-level resolution.
         float parentDisplayedRadius = GetDisplayedRadius(parentNode);
         if (parentDisplayedRadius > 0f)
         {
@@ -506,6 +725,7 @@ public class VisualizationManager : MonoBehaviour
             }
         }
 
+        // Phase F: Spawn each child at its exact Candidate K position with final radius
         for (int i = 0; i < children.Count; i++)
         {
             GameObject obj = SpawnNodeSphere(children[i], childPositions[i], cappedRadii[i]);
@@ -513,25 +733,39 @@ public class VisualizationManager : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Returns the displayed (visual) radius of a node's sphere.
+    /// Reads the actual localScale from the spawned GameObject.
+    /// Returns 0 if the node has no spawned sphere.
+    /// </summary>
     private float GetDisplayedRadius(ClusterNode node)
     {
         if (nodeSphereMap.TryGetValue(node, out GameObject sphereObj) && sphereObj != null)
         {
-
+            // Sphere diameter = localScale.x, so radius = localScale.x / 2
             return sphereObj.transform.localScale.x / 2f;
         }
         return 0f;
     }
 
+    /// <summary>
+    /// Computes sibling-capped radii for a group of children.
+    /// For groups with 2+ members: computes average nearest-neighbour distance,
+    /// then caps each radius to siblingRadiusCapFactor × avgNN / 2.
+    /// Single-child groups or disabled capping returns uncapped radii.
+    /// Positions are never modified — only radii are adjusted.
+    /// </summary>
     private float[] ComputeSiblingCappedRadii(Vector3[] positions, float[] uncappedRadii)
     {
         int count = positions.Length;
         float[] capped = new float[count];
         System.Array.Copy(uncappedRadii, capped, count);
 
+        // Skip capping if disabled or single child (no siblings to overlap)
         if (siblingRadiusCapFactor <= 0f || count <= 1)
             return capped;
 
+        // Phase B: Compute nearest-neighbour distance for each child
         float sumNN = 0f;
         for (int i = 0; i < count; i++)
         {
@@ -545,9 +779,11 @@ public class VisualizationManager : MonoBehaviour
             sumNN += minDist;
         }
 
+        // Phase C: Compute maximum allowed radius
         float avgNN = sumNN / count;
         float maxAllowedRadius = siblingRadiusCapFactor * avgNN / 2f;
 
+        // Phase D: Cap each radius
         int cappedCount = 0;
         for (int i = 0; i < count; i++)
         {
@@ -567,16 +803,25 @@ public class VisualizationManager : MonoBehaviour
         return capped;
     }
 
+    /// <summary>
+    /// Spawns a single node sphere.
+    /// If worldPosition is provided, uses that instead of the node's CSV position.
+    /// Top-level planets pass null (use CSV position). Children pass spread positions.
+    /// If radiusOverride >= 0, uses that radius instead of computing from node size/depth.
+    /// </summary>
     private GameObject SpawnNodeSphere(ClusterNode node, Vector3? worldPosition = null,
                                        float radiusOverride = -1f)
     {
         GameObject obj = Instantiate(planetPrefab, objectContainer);
 
+        // Position: use override if provided, otherwise true CSV position
         Vector3 finalPos = worldPosition ?? (node.Position * positionScale);
         obj.transform.position = finalPos;
 
+        // Track this node's actual world position for future child expansions
         nodeWorldPositionMap[node] = finalPos;
 
+        // Size: use override if provided, otherwise compute from node size + depth
         float radius;
         if (radiusOverride >= 0f)
         {
@@ -590,24 +835,40 @@ public class VisualizationManager : MonoBehaviour
         }
         Color color = GetNodeColor(node);
 
+        // Attach PlanetVisual
         PlanetVisual visual = obj.AddComponent<PlanetVisual>();
         visual.Initialize(node, radius, color);
 
+        // Track the mapping so we can hide/show this sphere on expand/collapse
         nodeSphereMap[node] = obj;
 
         return obj;
     }
 
+    /// <summary>
+    /// Spawns image quads for a leaf node using global-anchor placement (Candidate K).
+    ///
+    /// Each image is positioned using its raw UMAP offset from the planet
+    /// ancestor, scaled uniformly by planetScale. This preserves all
+    /// within-planet distance ratios and eliminates recursive compounding.
+    ///
+    /// Adaptive quad sizing is based on the actual group spread in scaled
+    /// space, replacing the previous effectiveRadius-based formula.
+    ///
+    /// Loads textures asynchronously via ImageLoader.
+    /// </summary>
     private void SpawnImages(ClusterNode leafNode)
     {
         List<ImageVisual> imageVisuals = new List<ImageVisual>();
 
         var images = leafNode.Images;
 
+        // Global anchor: compute each image's position relative to the planet
         ClusterNode planetNode = GetPlanetAncestor(leafNode);
         Vector3 planetWorldPos = nodeWorldPositionMap[planetNode];
         Vector3 planetRawPos = planetNode.Position * positionScale;
 
+        // Pre-compute all scaled positions (using per-planet effective scale)
         float effScale = GetEffectivePlanetScale(planetNode);
         Vector3[] scaledPositions = new Vector3[images.Count];
         for (int i = 0; i < images.Count; i++)
@@ -616,6 +877,7 @@ public class VisualizationManager : MonoBehaviour
             scaledPositions[i] = planetWorldPos + globalOffset * effScale;
         }
 
+        // Compute actual group spread for adaptive quad sizing
         Vector3 imgCentroid = Vector3.zero;
         foreach (var sp in scaledPositions)
             imgCentroid += sp;
@@ -627,11 +889,13 @@ public class VisualizationManager : MonoBehaviour
             float dist = Vector3.Distance(sp, imgCentroid);
             if (dist > groupRadius) groupRadius = dist;
         }
-        groupRadius = Mathf.Max(groupRadius, 0.1f);
+        groupRadius = Mathf.Max(groupRadius, 0.1f); // floor to prevent zero-size quads
 
+        // Adaptive quad size based on actual group spread
         float adaptiveQuadSize = groupRadius * 0.4f / Mathf.Sqrt(images.Count);
         adaptiveQuadSize = Mathf.Clamp(adaptiveQuadSize, minImageQuadSize, imageQuadSize);
 
+        // Spawn each image quad at its global-anchor position
         for (int i = 0; i < images.Count; i++)
         {
             GameObject quadObj = GameObject.CreatePrimitive(PrimitiveType.Quad);
@@ -639,6 +903,7 @@ public class VisualizationManager : MonoBehaviour
 
             quadObj.transform.position = scaledPositions[i];
 
+            // Attach ImageVisual with adaptive size
             ImageVisual visual = quadObj.AddComponent<ImageVisual>();
             visual.Initialize(images[i], adaptiveQuadSize);
 
@@ -646,6 +911,7 @@ public class VisualizationManager : MonoBehaviour
             leafNode.SpawnedChildObjects.Add(quadObj);
         }
 
+        // Load textures asynchronously
         if (ImageLoader.Instance != null)
         {
             ImageLoader.Instance.LoadImages(
@@ -675,10 +941,21 @@ public class VisualizationManager : MonoBehaviour
         }
     }
 
+
+    // -----------------------------------------------------------
+    // Connection lines (Stage 2)
+    // -----------------------------------------------------------
+
+    /// <summary>
+    /// Creates thin LineRenderer objects from the parent node to each of its
+    /// direct spawned children. Lines are purely visual (no collider).
+    /// Called after SpawnChildren/SpawnImages during ExpandNode.
+    /// </summary>
     private void SpawnConnectionLines(ClusterNode node)
     {
         if (node.SpawnedChildObjects == null || node.SpawnedChildObjects.Count == 0) return;
 
+        // Get parent world position
         Vector3 parentPos;
         if (!nodeWorldPositionMap.TryGetValue(node, out parentPos))
             parentPos = node.Position * positionScale;
@@ -692,24 +969,29 @@ public class VisualizationManager : MonoBehaviour
 
             Vector3 childPos = childObj.transform.position;
 
+            // Create a dedicated GameObject for the line
             GameObject lineObj = new GameObject($"Line_{node.NodeId}_to_{i}");
             lineObj.transform.SetParent(objectContainer);
 
             LineRenderer lr = lineObj.AddComponent<LineRenderer>();
 
+            // Configure the line
             lr.positionCount = 2;
             lr.SetPosition(0, parentPos);
             lr.SetPosition(1, childPos);
 
+            // Thin width
             lr.startWidth = 0.03f;
             lr.endWidth   = 0.03f;
 
+            // Simple unlit material with the node's planet color
             lr.material = new Material(Shader.Find("Sprites/Default"));
             Color lineColor = GetNodeColor(node);
             lineColor.a = 0.5f;
             lr.startColor = lineColor;
             lr.endColor   = lineColor;
 
+            // Ensure it renders in world space
             lr.useWorldSpace = true;
 
             lines.Add(lineObj);
@@ -720,6 +1002,10 @@ public class VisualizationManager : MonoBehaviour
         Debug.Log($"[VisualizationManager] 📎 Spawned {lines.Count} connection lines for \"{node.NodeId}\".");
     }
 
+    /// <summary>
+    /// Destroys all connection line GameObjects for a node and removes them from tracking.
+    /// Called during CollapseNode before restoring appearance.
+    /// </summary>
     private void DestroyConnectionLines(ClusterNode node)
     {
         if (!nodeConnectionLines.TryGetValue(node, out var lines)) return;
@@ -734,29 +1020,41 @@ public class VisualizationManager : MonoBehaviour
         Debug.Log($"[VisualizationManager] 🗑 Destroyed connection lines for \"{node.NodeId}\".");
     }
 
+    // -----------------------------------------------------------
+    // Camera focus on expansion
+    // -----------------------------------------------------------
+
+    /// <summary>
+    /// Computes the bounding region of an expansion: the parent’s world position
+    /// plus all spawned child object positions, including their visual radii.
+    /// Returns the centroid and the maximum extent (radius from centroid to
+    /// farthest point including object size).
+    /// </summary>
     private (Vector3 centroid, float extent) ComputeExpansionBounds(ClusterNode node)
     {
-
+        // Collect all positions: parent + each spawned child
         Vector3 parentPos = nodeWorldPositionMap.TryGetValue(node, out Vector3 pp)
             ? pp
             : node.Position * positionScale;
 
         var positions = new List<Vector3> { parentPos };
-        var radii = new List<float> { 0f };
+        var radii = new List<float> { 0f }; // parent radius not critical for framing
 
         foreach (var childObj in node.SpawnedChildObjects)
         {
             if (childObj == null) continue;
             positions.Add(childObj.transform.position);
-
+            // Half the scale gives the visual radius of the sphere/quad
             radii.Add(childObj.transform.localScale.x / 2f);
         }
 
+        // Compute centroid
         Vector3 centroid = Vector3.zero;
         foreach (var pos in positions)
             centroid += pos;
         centroid /= positions.Count;
 
+        // Compute max extent from centroid
         float maxExtent = 0f;
         for (int i = 0; i < positions.Count; i++)
         {
@@ -764,11 +1062,17 @@ public class VisualizationManager : MonoBehaviour
             if (dist > maxExtent) maxExtent = dist;
         }
 
+        // Ensure a minimum extent so the camera doesn't zoom in too aggressively
         maxExtent = Mathf.Max(maxExtent, 0.5f);
 
         return (centroid, maxExtent);
     }
 
+    /// <summary>
+    /// Triggers the camera to smoothly focus on the expansion region of a node.
+    /// Called at the end of ExpandNode after children, lines, and fade are set up.
+    /// Safe to call even if cameraController is not assigned (no-op).
+    /// </summary>
     private void FocusCameraOnExpansion(ClusterNode node)
     {
         if (cameraController == null) return;
@@ -780,6 +1084,15 @@ public class VisualizationManager : MonoBehaviour
                   $"(centroid={centroid}, extent={extent:F2}).");
     }
 
+    // -----------------------------------------------------------
+    // Parent fade-out on expansion
+    // -----------------------------------------------------------
+
+    /// <summary>
+    /// Starts the parent sphere fade-out coroutine for a node.
+    /// Cancels any existing fade for the same node first.
+    /// Assumes the node's sphere already has its collider disabled.
+    /// </summary>
     private void StartFadeOut(ClusterNode node)
     {
         CancelFadeOut(node);
@@ -788,6 +1101,10 @@ public class VisualizationManager : MonoBehaviour
         activeFadeCoroutines[node] = fade;
     }
 
+    /// <summary>
+    /// Cancels the fade-out coroutine for a node if one is running.
+    /// Called during collapse to stop the fade mid-animation.
+    /// </summary>
     private void CancelFadeOut(ClusterNode node)
     {
         if (activeFadeCoroutines.TryGetValue(node, out Coroutine existing))
@@ -797,12 +1114,21 @@ public class VisualizationManager : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Coroutine: gradually fades the parent sphere from alpha 1.0 to 0.0
+    /// over the specified duration. At the end:
+    ///   - disables the parent's renderer (fully invisible)
+    ///   - destroys connection lines
+    /// The parent's collider must already be disabled before this runs.
+    /// </summary>
     private IEnumerator FadeOutParent(ClusterNode node, float duration)
     {
         if (!nodeSphereMap.TryGetValue(node, out GameObject sphereObj)) yield break;
         PlanetVisual visual = sphereObj?.GetComponent<PlanetVisual>();
         if (visual == null) yield break;
 
+        // Switch to transparent shader mode so alpha changes are visible
+        // (starts at alpha 1.0 — fully opaque appearance in transparent mode)
         visual.SetTransparent(true);
 
         float elapsed = 0f;
@@ -816,16 +1142,27 @@ public class VisualizationManager : MonoBehaviour
             yield return null;
         }
 
+        // Fade complete: make parent fully invisible
         visual.SetAlpha(0f);
         visual.SetVisible(false);
 
+        // Destroy connection lines (they served their purpose)
         DestroyConnectionLines(node);
 
+        // Clean up coroutine reference
         activeFadeCoroutines.Remove(node);
 
         Debug.Log($"[VisualizationManager] 👻 Parent \"{node.NodeId}\" fully faded out after {duration}s.");
     }
 
+    // -----------------------------------------------------------
+    // Scaling
+    // -----------------------------------------------------------
+
+    /// <summary>
+    /// Computes the visual radius for a node based on its size.
+    /// Formula: radius = log2(size + 1) * radiusScale
+    /// </summary>
     private float ComputeRadius(int size)
     {
         float logSize = Mathf.Log(size + 1, 2);
@@ -833,6 +1170,13 @@ public class VisualizationManager : MonoBehaviour
         return Mathf.Max(radius, minRadius);
     }
 
+    /// <summary>
+    /// Walks up the Parent chain from any node to find its top-level planet ancestor.
+    /// Used by the global-anchor placement strategy (Candidate K) to compute
+    /// entity positions relative to the planet's coordinate frame.
+    /// Guaranteed to terminate: the Parent chain always ends at a planet node
+    /// (where Parent == null).
+    /// </summary>
     private ClusterNode GetPlanetAncestor(ClusterNode node)
     {
         ClusterNode current = node;
@@ -841,16 +1185,26 @@ public class VisualizationManager : MonoBehaviour
         return current;
     }
 
+    // -----------------------------------------------------------
+    // Color assignment
+    // -----------------------------------------------------------
+
+    /// <summary>
+    /// Returns a color for any node in the tree.
+    /// Uses the planet family color and optionally tints by depth.
+    /// </summary>
     private Color GetNodeColor(ClusterNode node)
     {
-
+        // Use semantic cluster color from CSV
         Color baseColor = node.RepresentativeColor;
 
+        // Fallback safety
         if (baseColor == Color.clear || baseColor == Color.black)
         {
             baseColor = GetPlanetColor(node.PlanetIndex);
         }
 
+        // Optional depth tint
         if (tintByDepth && node.Depth > 0)
         {
             float lightenAmount = node.Depth * 0.04f;
@@ -860,15 +1214,31 @@ public class VisualizationManager : MonoBehaviour
         return baseColor;
     }
 
+    /// <summary>
+    /// Returns the base color for a planet by its index.
+    /// Uses the explicit planetColors array if available.
+    /// For indices beyond the array, auto-generates distinct colors
+    /// using golden-ratio hue distribution in HSL space.
+    /// </summary>
     private Color GetPlanetColor(int planetIndex)
     {
         if (planetColors != null && planetIndex >= 0 && planetIndex < planetColors.Length)
             return planetColors[planetIndex];
 
+        // Auto-generate for arbitrary planet counts using golden ratio
+        // for maximum perceptual separation between adjacent indices
         float hue = (planetIndex * 0.618033988f) % 1f;
         return Color.HSVToRGB(hue, 0.7f, 0.85f);
     }
 
+    // -----------------------------------------------------------
+    // Camera: one-time initial framing only
+    // -----------------------------------------------------------
+
+    /// <summary>
+    /// Frames the camera once at startup to show all top-level planets.
+    /// After this, the camera is fully user-controlled.
+    /// </summary>
     private void FrameInitialView()
     {
         if (planetObjects.Count == 0) return;
@@ -876,11 +1246,13 @@ public class VisualizationManager : MonoBehaviour
         Camera cam = Camera.main;
         if (cam == null) return;
 
+        // Compute centroid of all planets
         Vector3 centroid = Vector3.zero;
         foreach (var obj in planetObjects)
             centroid += obj.transform.position;
         centroid /= planetObjects.Count;
 
+        // Find farthest planet from centroid
         float maxDistance = 0f;
         foreach (var obj in planetObjects)
         {
@@ -890,11 +1262,13 @@ public class VisualizationManager : MonoBehaviour
                 maxDistance = dist + planetRadius;
         }
 
+        // Ensure minimum distance
         maxDistance = Mathf.Max(maxDistance, 8.0f);
 
+        // Pull camera back to see everything
         float fov = cam.fieldOfView * Mathf.Deg2Rad;
         float cameraDistance = maxDistance / Mathf.Tan(fov / 2f);
-        cameraDistance *= 1.3f;
+        cameraDistance *= 1.3f; // padding
 
         Vector3 cameraOffset = new Vector3(0f, cameraDistance * 0.3f, -cameraDistance);
         cam.transform.position = centroid + cameraOffset;
@@ -903,11 +1277,22 @@ public class VisualizationManager : MonoBehaviour
         Debug.Log($"[VisualizationManager] 📷 Initial camera framed at distance {cameraDistance:F1}.");
     }
 
+    // -----------------------------------------------------------
+    // Ghost Overlay: P = ghost spheres, L = ghost lines
+    // -----------------------------------------------------------
+
+    /// <summary>
+    /// Toggles the ghost planet overlay ON/OFF.
+    /// When ON: creates semi-transparent duplicate spheres for all
+    /// currently faded expanded parent nodes.
+    /// When OFF: destroys all ghost spheres and resets state.
+    /// Called by InteractionManager when the P key is pressed.
+    /// </summary>
     public void ToggleGhostPlanetOverlay()
     {
         if (ghostPlanetOverlayActive)
         {
-
+            // Turn OFF: clear lines first (L depends on P), then spheres
             int lineCount = ghostLineObjects.Count;
             int sphereCount = ghostSphereObjects.Count;
             ClearGhostLines();
@@ -918,13 +1303,20 @@ public class VisualizationManager : MonoBehaviour
         }
         else
         {
-
+            // Turn ON: show ghosted spheres for all faded expanded parents
             ShowGhostSpheres();
             ghostPlanetOverlayActive = true;
             Debug.Log($"[VisualizationManager] 👻 Ghost overlay P → ON ({ghostedNodes.Count} nodes ghosted).");
         }
     }
 
+    /// <summary>
+    /// Identifies all nodes that qualify for ghost overlay:
+    /// - IsExpanded == true
+    /// - Real sphere still exists in nodeSphereMap
+    /// - Renderer is disabled (fade has completed)
+    /// - Not currently mid-fade (no active fade coroutine)
+    /// </summary>
     private List<ClusterNode> GetFadedExpandedNodes()
     {
         var result = new List<ClusterNode>();
@@ -936,7 +1328,8 @@ public class VisualizationManager : MonoBehaviour
             if (node.IsExpanded && sphere != null)
             {
                 Renderer r = sphere.GetComponent<Renderer>();
-
+                // Only ghost if renderer is disabled (fade completed)
+                // AND no active fade coroutine is running (not mid-fade)
                 if (r != null && !r.enabled && !activeFadeCoroutines.ContainsKey(node))
                 {
                     result.Add(node);
@@ -946,38 +1339,48 @@ public class VisualizationManager : MonoBehaviour
         return result;
     }
 
+    /// <summary>
+    /// Creates ghost overlay spheres for all faded expanded parent nodes.
+    /// Ghost spheres are visual-only duplicates: no collider, no PlanetVisual,
+    /// semi-transparent (alpha 0.25), positioned at the real node's world position.
+    /// </summary>
     private void ShowGhostSpheres()
     {
-
+        // Clear any existing ghost spheres first (safety)
         ClearGhostSpheres();
 
         List<ClusterNode> candidates = GetFadedExpandedNodes();
 
         foreach (ClusterNode node in candidates)
         {
-
+            // 1. Instantiate from planetPrefab (clean sphere, no scripts baked in)
             GameObject ghostObj = Instantiate(planetPrefab, objectContainer);
 
+            // 2. Position at the real node's world position
             if (nodeWorldPositionMap.TryGetValue(node, out Vector3 worldPos))
                 ghostObj.transform.position = worldPos;
             else
                 ghostObj.transform.position = node.Position * positionScale;
 
+            // 3. Compute the same radius/diameter as the real node sphere
             float radius = ComputeRadius(node.Size);
             float depthScale = Mathf.Pow(depthRadiusFactor, node.Depth);
             radius = Mathf.Max(radius * depthScale, minEffectiveRadius);
             float diameter = radius * 2f;
             ghostObj.transform.localScale = new Vector3(diameter, diameter, diameter);
 
+            // 4. Configure transparent material manually (do NOT use PlanetVisual)
             Renderer renderer = ghostObj.GetComponent<Renderer>();
             if (renderer != null)
             {
                 Material ghostMat = new Material(renderer.sharedMaterial);
 
+                // Set node color with ghost alpha
                 Color ghostColor = GetNodeColor(node);
                 ghostColor.a = 0.25f;
                 ghostMat.color = ghostColor;
 
+                // Configure Standard shader transparent render mode
                 ghostMat.SetFloat("_Mode", 3f);
                 ghostMat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
                 ghostMat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
@@ -990,16 +1393,27 @@ public class VisualizationManager : MonoBehaviour
                 renderer.material = ghostMat;
             }
 
+            // 5. Destroy collider — ghost must not block raycasts
             Collider col = ghostObj.GetComponent<Collider>();
             if (col != null) Destroy(col);
 
+            // 6. Do NOT add PlanetVisual — safety reasons:
+            //    - PlanetVisual.Node would reference a real ClusterNode
+            //    - CollapseNode checks GetComponent<PlanetVisual>() to clean nodeSphereMap
+            //    - FindObjectsOfType<PlanetVisual>() would find ghosts
+
+            // 7. Name for easy identification
             ghostObj.name = $"Ghost_{node.NodeId}";
 
+            // 8. Track for cleanup
             ghostSphereObjects.Add(ghostObj);
             ghostedNodes.Add(node);
         }
     }
 
+    /// <summary>
+    /// Destroys all ghost overlay spheres and clears tracking lists.
+    /// </summary>
     private void ClearGhostSpheres()
     {
         foreach (var obj in ghostSphereObjects)
@@ -1010,6 +1424,9 @@ public class VisualizationManager : MonoBehaviour
         ghostedNodes.Clear();
     }
 
+    /// <summary>
+    /// Destroys all ghost overlay lines and clears the tracking list.
+    /// </summary>
     private void ClearGhostLines()
     {
         foreach (var obj in ghostLineObjects)
@@ -1019,9 +1436,17 @@ public class VisualizationManager : MonoBehaviour
         ghostLineObjects.Clear();
     }
 
+    /// <summary>
+    /// Toggles the ghost line overlay ON/OFF.
+    /// L only works when P (ghost planet overlay) is already ON.
+    /// When L is turned ON: creates overlay LineRenderers from each ghosted
+    /// parent to its spawned children.
+    /// When L is turned OFF: destroys all ghost lines, ghost spheres remain.
+    /// Called by InteractionManager when the L key is pressed.
+    /// </summary>
     public void ToggleGhostLineOverlay()
     {
-
+        // L does nothing when P is OFF — enforces the invariant
         if (!ghostPlanetOverlayActive) return;
 
         if (ghostLineOverlayActive)
@@ -1038,18 +1463,32 @@ public class VisualizationManager : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Creates ghost overlay lines from each ghosted parent node to its
+    /// spawned children. Uses ghostedNodes (populated by ShowGhostSpheres)
+    /// as the source of which parents to draw lines from.
+    ///
+    /// Ghost lines are visually distinct from normal connection lines:
+    /// - Thinner width (0.015f vs normal 0.03f)
+    /// - Lower alpha (0.25 vs normal 0.5)
+    /// - Same planet family color
+    ///
+    /// Covers ALL entries in node.SpawnedChildObjects (both child spheres
+    /// and image quads), matching the original SpawnConnectionLines behavior.
+    /// </summary>
     private void ShowGhostLines()
     {
-
+        // Clear any existing ghost lines first (safety)
         ClearGhostLines();
 
         foreach (ClusterNode node in ghostedNodes)
         {
-
+            // Get parent world position
             Vector3 parentPos;
             if (!nodeWorldPositionMap.TryGetValue(node, out parentPos))
                 parentPos = node.Position * positionScale;
 
+            // Skip if no spawned children
             if (node.SpawnedChildObjects == null || node.SpawnedChildObjects.Count == 0)
                 continue;
 
@@ -1059,26 +1498,31 @@ public class VisualizationManager : MonoBehaviour
             for (int i = 0; i < node.SpawnedChildObjects.Count; i++)
             {
                 GameObject childObj = node.SpawnedChildObjects[i];
-                if (childObj == null) continue;
+                if (childObj == null) continue; // defensive null-check
 
                 Vector3 childPos = childObj.transform.position;
 
+                // Create a dedicated GameObject for the ghost line
                 GameObject lineObj = new GameObject($"GhostLine_{node.NodeId}_to_{i}");
                 lineObj.transform.SetParent(objectContainer);
 
                 LineRenderer lr = lineObj.AddComponent<LineRenderer>();
 
+                // Configure the line
                 lr.positionCount = 2;
                 lr.SetPosition(0, parentPos);
                 lr.SetPosition(1, childPos);
 
+                // Thinner than normal lines (0.015f vs 0.03f)
                 lr.startWidth = 0.015f;
                 lr.endWidth   = 0.015f;
 
+                // Simple unlit material with ghost alpha
                 lr.material = new Material(Shader.Find("Sprites/Default"));
                 lr.startColor = lineColor;
                 lr.endColor   = lineColor;
 
+                // Ensure it renders in world space
                 lr.useWorldSpace = true;
 
                 ghostLineObjects.Add(lineObj);
@@ -1086,6 +1530,13 @@ public class VisualizationManager : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Clears ALL ghost overlays (spheres and lines) and resets state flags.
+    /// Called at the start of ExpandNode and CollapseNode to ensure overlays
+    /// are dismissed before the scene state changes.
+    /// Safe no-op if no overlays are active.
+    /// Guarded against redundant calls during recursive collapse chains.
+    /// </summary>
     private void ClearAllGhostOverlays()
     {
         if (!ghostPlanetOverlayActive && !ghostLineOverlayActive) return;

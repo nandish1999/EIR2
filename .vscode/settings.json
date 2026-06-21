@@ -67,5 +67,5 @@
         "*.sln": "*.csproj",
         "*.slnx": "*.csproj"
     },
-    "dotnet.defaultSolution": "ButterflyClusterViz 2.slnx"
+    "dotnet.defaultSolution": "EIR2.slnx"
 }
